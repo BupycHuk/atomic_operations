@@ -4,12 +4,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"math/big"
 	"sync"
-	"sync/atomic"
-	"unsafe"
 )
 
 var db = &Map{
-	m: map[string]big.Int{},
+	m: map[string]**big.Int{},
 }
 
 type KeyValue struct {
@@ -42,28 +40,46 @@ func setupRouter() *gin.Engine {
 			c.JSON(400, gin.H{"status": "bad request", "err": err.Error()})
 		}
 
-		done := false
-		for !done {
-			dbCopy := db
-			dbClone := db.Clone()
-			isNegative := false
+		isNegative := false
 
-			waitGroup := sync.WaitGroup{}
-			for _, keyvalue := range json {
+		waitGroup := sync.WaitGroup{}
+		for _, keyvalue := range json {
+			if keyvalue.Value < 0 {
 				waitGroup.Add(1)
 				go func() {
-					result := dbClone.AddBigInt(keyvalue.Key, *big.NewInt(keyvalue.Value))
+					result := db.AddBigInt(keyvalue.Key, *big.NewInt(keyvalue.Value))
 					if result.Sign() == -1 {
 						isNegative = true
 					}
 					waitGroup.Done()
 				}()
 			}
-			waitGroup.Wait()
-			if isNegative {
-				break
+		}
+		waitGroup.Wait()
+		if isNegative {
+			waitGroup := sync.WaitGroup{}
+			for _, keyvalue := range json {
+				if keyvalue.Value < 0 {
+					waitGroup.Add(1)
+					go func() {
+						db.AddBigInt(keyvalue.Key, *big.NewInt(-keyvalue.Value))
+						waitGroup.Done()
+					}()
+				}
 			}
-			done = atomic.CompareAndSwapPointer((*unsafe.Pointer)(unsafe.Pointer(&db)), unsafe.Pointer(dbCopy), unsafe.Pointer(&dbClone))
+			waitGroup.Wait()
+		} else {
+			waitGroup := sync.WaitGroup{}
+			for _, keyvalue := range json {
+				if keyvalue.Value > 0 {
+					waitGroup.Add(1)
+					go func() {
+						db.AddBigInt(keyvalue.Key, *big.NewInt(keyvalue.Value))
+						waitGroup.Done()
+					}()
+				}
+			}
+			waitGroup.Wait()
 		}
 
 		c.JSON(200, gin.H{"status": "ok"})
